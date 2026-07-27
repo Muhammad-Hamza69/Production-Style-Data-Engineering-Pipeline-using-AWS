@@ -45,7 +45,7 @@ This pattern is called **Medallion Architecture (Bronze → Silver → Gold)** a
 
 ## 2. Architecture Overview
 
-![alt text](./docs/architecture.png)
+![alt text](./AWS-Architecture.drawio.png)
 
 **DevOps additions on top of the AWS data pipeline above:**
 
