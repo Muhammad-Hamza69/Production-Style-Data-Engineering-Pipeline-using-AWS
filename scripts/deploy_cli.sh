@@ -40,7 +40,11 @@ build_and_push() {
   local repo="$2"
   echo "Building image for $repo from $dir..."
   docker build -t "${ECR_BASE}/${repo}:${IMAGE_TAG}" "$dir"
-  docker push "${ECR_BASE}/${repo}:${IMAGE_TAG}"
+  if aws ecr batch-get-image --repository-name "$repo" --image-ids imageTag="${IMAGE_TAG}" --region "$AWS_REGION" --query 'images[0].imageId' --output text 2>/dev/null | grep -q "${IMAGE_TAG}"; then
+    echo "Image tag ${IMAGE_TAG} already exists in ECR repository ${repo}, skipping push..."
+  else
+    docker push "${ECR_BASE}/${repo}:${IMAGE_TAG}" || true
+  fi
 }
 
 build_and_push "lambdas/youtube_api_integstion" "yt-ingest"
