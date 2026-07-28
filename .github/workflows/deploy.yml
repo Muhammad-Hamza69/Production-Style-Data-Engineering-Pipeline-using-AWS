@@ -139,12 +139,11 @@ jobs:
         working-directory: lambdas/youtube_api_integstion
         run: |
           IMAGE="${{ env.ECR_BASE }}/yt-ingest:bootstrap"
-          # ECR has immutable tags — skip push if bootstrap already exists
-          EXISTS=$(aws ecr describe-images --region us-east-1 \
-            --repository-name yt-ingest \
-            --image-ids imageTag=bootstrap \
-            --query 'imageDetails[0].imageTag' --output text 2>/dev/null || echo "")
-          if [ "$EXISTS" = "bootstrap" ]; then
+          # aws ecr describe-images exits 0 if tag exists, non-zero if not.
+          # ECR repos have immutable tags so we must NOT re-push existing tags.
+          if aws ecr describe-images --region us-east-1 \
+               --repository-name yt-ingest \
+               --image-ids imageTag=bootstrap 2>/dev/null; then
             echo "Bootstrap image already exists in yt-ingest — skipping build."
           else
             docker build -t "$IMAGE" .
@@ -155,12 +154,9 @@ jobs:
         working-directory: lambdas/raw_transform
         run: |
           IMAGE="${{ env.ECR_BASE }}/yt-raw-transform:bootstrap"
-          # ECR has immutable tags — skip push if bootstrap already exists
-          EXISTS=$(aws ecr describe-images --region us-east-1 \
-            --repository-name yt-raw-transform \
-            --image-ids imageTag=bootstrap \
-            --query 'imageDetails[0].imageTag' --output text 2>/dev/null || echo "")
-          if [ "$EXISTS" = "bootstrap" ]; then
+          if aws ecr describe-images --region us-east-1 \
+               --repository-name yt-raw-transform \
+               --image-ids imageTag=bootstrap 2>/dev/null; then
             echo "Bootstrap image already exists in yt-raw-transform — skipping build."
           else
             docker build -t "$IMAGE" .
@@ -171,12 +167,9 @@ jobs:
         working-directory: lambdas/dbt_trigger
         run: |
           IMAGE="${{ env.ECR_BASE }}/yt-dbt-trigger:bootstrap"
-          # ECR has immutable tags — skip push if bootstrap already exists
-          EXISTS=$(aws ecr describe-images --region us-east-1 \
-            --repository-name yt-dbt-trigger \
-            --image-ids imageTag=bootstrap \
-            --query 'imageDetails[0].imageTag' --output text 2>/dev/null || echo "")
-          if [ "$EXISTS" = "bootstrap" ]; then
+          if aws ecr describe-images --region us-east-1 \
+               --repository-name yt-dbt-trigger \
+               --image-ids imageTag=bootstrap 2>/dev/null; then
             echo "Bootstrap image already exists in yt-dbt-trigger — skipping build."
           else
             docker build -t "$IMAGE" .
