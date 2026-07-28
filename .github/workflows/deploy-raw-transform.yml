@@ -70,9 +70,14 @@ jobs:
       - name: Read back sibling component image tags
         id: sibling_tags
         run: |
-          echo "ingest=$(terraform output -raw ingest_image_uri | awk -F: '{print $NF}')" >> "$GITHUB_OUTPUT"
-          echo "dbt_trigger=$(terraform output -raw dbt_trigger_image_uri | awk -F: '{print $NF}')" >> "$GITHUB_OUTPUT"
-          echo "dbt=$(terraform output -raw dbt_image_uri | awk -F: '{print $NF}')" >> "$GITHUB_OUTPUT"
+          INGEST_TAG=$(terraform output -raw ingest_image_uri 2>/dev/null | awk -F: '{print $NF}')
+          DBT_TRIGGER_TAG=$(terraform output -raw dbt_trigger_image_uri 2>/dev/null | awk -F: '{print $NF}')
+          DBT_TAG=$(terraform output -raw dbt_image_uri 2>/dev/null | awk -F: '{print $NF}')
+
+          echo "ingest=${INGEST_TAG:-${{ github.sha }}}" >> "$GITHUB_OUTPUT"
+          echo "dbt_trigger=${DBT_TRIGGER_TAG:-${{ github.sha }}}" >> "$GITHUB_OUTPUT"
+          echo "dbt=${DBT_TAG:-${{ github.sha }}}" >> "$GITHUB_OUTPUT"
+
 
       - name: Terraform apply (yt-raw-transform only)
         run: |
