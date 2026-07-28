@@ -134,20 +134,20 @@ jobs:
 
       # ── Phase 3: Import pre-existing AWS resources into state ──────────────
       # Resources from a previous partial apply already exist in AWS but are
-      # not in Terraform state — importing them prevents 409/AlreadyExists
-      # errors on apply.
+      # not in Terraform state. Use `timeout` so a hung AWS API call never
+      # blocks the pipeline indefinitely. `|| true` makes failures non-fatal.
       - name: Phase 3 — Import existing AWS resources into Terraform state
         run: |
           CLUSTER="yt-pipeline-dashboard"
           ACCOUNT="${{ env.AWS_ACCOUNT_ID }}"
 
-          # EKS access entries — created by the EKS module; 409 if already exist
-          terraform import \
+          # EKS access entries — 409 if already exist on cluster
+          timeout 60 terraform import \
             'module.eks.aws_eks_access_entry.gha_deploy' \
             "${CLUSTER}/arn:aws:iam::${ACCOUNT}:role/gha-deploy-role" \
             2>/dev/null || true
 
-          terraform import \
+          timeout 60 terraform import \
             'module.eks.aws_eks_access_entry.dbt_trigger' \
             "${CLUSTER}/arn:aws:iam::${ACCOUNT}:role/yt-dbt-trigger-role" \
             2>/dev/null || true
