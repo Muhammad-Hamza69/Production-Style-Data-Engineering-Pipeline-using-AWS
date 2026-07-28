@@ -1,16 +1,9 @@
-name: Provision Shared Infrastructure
+name: Deploy Pipeline (AWS CLI)
 
-# Lints the whole repo and applies everything except the 3 Lambdas and the
-# dashboard — each of those now has its own independent deploy-*.yml
-# workflow (instructor feedback: "three lambdas should be separately
-# managed" / "Go with Argo CD"). Kept as one workflow file so `needs:` can
-# sequence lint -> changes -> terraform-apply — GitHub Actions job
-# dependencies only work within a single workflow.
 on:
   push:
     branches: [main]
   workflow_dispatch: {}
-
 
 permissions:
   id-token: write
@@ -19,7 +12,6 @@ permissions:
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
   AWS_ACCOUNT_ID: "300617413029"
-  ECR_BASE: "300617413029.dkr.ecr.us-east-1.amazonaws.com"
 
 jobs:
   lint:
@@ -32,227 +24,24 @@ jobs:
       - run: pip install flake8 black
       - run: flake8 lambdas dashboard --max-line-length=120
       - run: black --check lambdas dashboard
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.7.5"
-      - run: terraform fmt -check -recursive terraform/
 
-  changes:
+  deploy:
     runs-on: ubuntu-latest
     needs: lint
-    outputs:
-      terraform: ${{ steps.filter.outputs.terraform }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            terraform:
-              - 'terraform/**'
-              - 'iam_permission/**'
-              - 'step_functions/**'
-
-  # ── Phase 1: ECR repos only ──────────────────────────────────────────────────
-  # Lambda functions (container image type) require the ECR image to exist
-  # BEFORE aws_lambda_function can be created. On first bootstrap the repos
-  # don't exist yet, so we must create them first, push placeholder images,
-  # then run the full apply.
-  terraform-apply:
-    runs-on: ubuntu-latest
-    needs: changes
-    timeout-minutes: 90
-    permissions:
-      id-token: write
-      contents: read
-    defaults:
-      run:
-        working-directory: terraform/envs/prod
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      - name: Debug Role ARN
-        run: |
-          echo "Role ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN || 'arn:aws:iam::300617413029:role/gha-deploy-role' }}"
-          echo "Region: ${{ vars.AWS_REGION || 'us-east-1' }}"
-
-      - uses: aws-actions/configure-aws-credentials@v4
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || 'arn:aws:iam::300617413029:role/gha-deploy-role' }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.7.5"
-
-      - run: terraform init
-
-      # ── Force-unlock stale state lock ──────────────────────────────────────
-      # If a previous run was cancelled mid-apply it leaves a DynamoDB lock
-      # behind. We delete the lock item directly so the next apply can proceed.
-      # This is safe in CI because only one workflow runs at a time on main.
-      - name: Force-unlock stale Terraform state lock (if any)
-        working-directory: .
+      - name: Run Pure AWS CLI Deployment Script
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          LOCK_KEY="yt-pipeline-tfstate-us-east-1-300617413029/envs/prod/terraform.tfstate"
-          echo "Checking for stale state lock..."
-          LOCK=$(aws dynamodb get-item \
-            --region us-east-1 \
-            --table-name yt-pipeline-tfstate-lock \
-            --key "{\"LockID\": {\"S\": \"${LOCK_KEY}\"}}" \
-            --query 'Item.LockID.S' --output text 2>/dev/null || echo "")
-          if [ -n "$LOCK" ] && [ "$LOCK" != "None" ]; then
-            echo "Stale lock found — deleting from DynamoDB: $LOCK"
-            aws dynamodb delete-item \
-              --region us-east-1 \
-              --table-name yt-pipeline-tfstate-lock \
-              --key "{\"LockID\": {\"S\": \"${LOCK_KEY}\"}}"
-            echo "Lock cleared."
-          else
-            echo "No stale lock found. Proceeding."
-          fi
-      - name: Phase 1 — Create ECR repositories
-        run: |
-          terraform apply -auto-approve -target=module.ecr \
-            -var="youtube_api_key=${{ secrets.YOUTUBE_API_KEY }}" \
-            -var="allowed_dashboard_cidr=${{ vars.DASHBOARD_ALLOWED_CIDR }}" \
-            -var="alert_email=${{ vars.ALERT_EMAIL }}" \
-            -var='lakeformation_admin_arns=${{ vars.LAKEFORMATION_ADMIN_ARNS }}' \
-            -var="ingest_image_tag=bootstrap" \
-            -var="raw_transform_image_tag=bootstrap" \
-            -var="dbt_trigger_image_tag=bootstrap" \
-            -var="dbt_image_tag=bootstrap"
-
-      # ── Phase 2: Build & push bootstrap images ──────────────────────────────
-      # Build each Lambda Dockerfile and push a "bootstrap" tag so that the
-      # full apply (Phase 3) can create aws_lambda_function resources.
-      # On subsequent runs the ECR repos already have images so this step
-      # is effectively a no-op (push is idempotent).
-      - name: Phase 2 — Log in to ECR
-        working-directory: .
-        run: |
-          aws ecr get-login-password --region ${{ vars.AWS_REGION || 'us-east-1' }} \
-            | docker login --username AWS --password-stdin \
-              ${{ env.ECR_BASE }}
-
-      - name: Phase 2 — Build & push yt-ingest image
-        working-directory: lambdas/youtube_api_integstion
-        run: |
-          IMAGE="${{ env.ECR_BASE }}/yt-ingest:bootstrap"
-          # aws ecr describe-images exits 0 if tag exists, non-zero if not.
-          # ECR repos have immutable tags so we must NOT re-push existing tags.
-          if aws ecr describe-images --region us-east-1 \
-               --repository-name yt-ingest \
-               --image-ids imageTag=bootstrap 2>/dev/null; then
-            echo "Bootstrap image already exists in yt-ingest — skipping build."
-          else
-            docker build -t "$IMAGE" .
-            docker push "$IMAGE"
-          fi
-
-      - name: Phase 2 — Build & push yt-raw-transform image
-        working-directory: lambdas/raw_transform
-        run: |
-          IMAGE="${{ env.ECR_BASE }}/yt-raw-transform:bootstrap"
-          if aws ecr describe-images --region us-east-1 \
-               --repository-name yt-raw-transform \
-               --image-ids imageTag=bootstrap 2>/dev/null; then
-            echo "Bootstrap image already exists in yt-raw-transform — skipping build."
-          else
-            docker build -t "$IMAGE" .
-            docker push "$IMAGE"
-          fi
-
-      - name: Phase 2 — Build & push yt-dbt-trigger image
-        working-directory: lambdas/dbt_trigger
-        run: |
-          IMAGE="${{ env.ECR_BASE }}/yt-dbt-trigger:bootstrap"
-          if aws ecr describe-images --region us-east-1 \
-               --repository-name yt-dbt-trigger \
-               --image-ids imageTag=bootstrap 2>/dev/null; then
-            echo "Bootstrap image already exists in yt-dbt-trigger — skipping build."
-          else
-            docker build -t "$IMAGE" .
-            docker push "$IMAGE"
-          fi
-
-      # ── Phase 3: Import pre-existing AWS resources into state ──────────────
-      # Resources from a previous partial apply already exist in AWS but are
-      # not in Terraform state. EKS access entries use colon syntax:
-      #   cluster_name:principal_arn
-      - name: Phase 3 — Import existing AWS resources into Terraform state
-        run: |
-          CLUSTER="yt-pipeline-dashboard"
-          ACCOUNT="${{ env.AWS_ACCOUNT_ID }}"
-
-          # EKS access entries: format is cluster_name:principal_arn
-          timeout 60 terraform import \
-            'module.eks.aws_eks_access_entry.gha_deploy' \
-            "${CLUSTER}:arn:aws:iam::${ACCOUNT}:role/gha-deploy-role" || true
-
-          timeout 60 terraform import \
-            'module.eks.aws_eks_access_entry.dbt_trigger' \
-            "${CLUSTER}:arn:aws:iam::${ACCOUNT}:role/yt-dbt-trigger-role" || true
-
-          timeout 60 terraform import \
-            'module.eks.aws_eks_access_policy_association.gha_deploy_admin' \
-            "${CLUSTER}:arn:aws:iam::${ACCOUNT}:role/gha-deploy-role:arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy" || true
-
-          timeout 60 terraform import \
-            'module.eks.aws_eks_access_policy_association.dbt_trigger_edit' \
-            "${CLUSTER}:arn:aws:iam::${ACCOUNT}:role/yt-dbt-trigger-role:arn:aws:eks::aws:cluster-access-policy/AmazonEKSEditPolicy" || true
-
-          # Force-clear lock in case any import timed out
-          LOCK_KEY="yt-pipeline-tfstate-us-east-1-300617413029/envs/prod/terraform.tfstate"
-          aws dynamodb delete-item \
-            --region us-east-1 \
-            --table-name yt-pipeline-tfstate-lock \
-            --key "{\"LockID\": {\"S\": \"${LOCK_KEY}\"}}" 2>/dev/null || true
-          echo "Post-import lock cleared."
-
-      # ── Phase 3: Read back existing image tags from state ──────────────────
-      - name: Phase 3 — Read back current per-component image tags
-        id: tags
-        run: |
-          # get_tag reads state output, but MUST verify the image tag actually
-          # exists in ECR repository. If not in ECR, fallback to 'bootstrap'.
-          get_tag() {
-            local output_name="$1"
-            local repo_name="$2"
-            local out ec tag
-
-            out=$(terraform output -raw "$output_name" 2>/dev/null)
-            ec=$?
-            if [ $ec -eq 0 ]; then
-              tag=$(echo "$out" | awk -F: '{print $NF}' | tr -d '[:space:]')
-              if [[ -n "$tag" ]] && [[ "$tag" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-                # Verify that this tag ACTUALLY exists in ECR before using it!
-                if aws ecr describe-images --region us-east-1 \
-                     --repository-name "$repo_name" \
-                     --image-ids imageTag="$tag" 2>/dev/null; then
-                  echo "$tag"
-                  return
-                fi
-              fi
-            fi
-
-            echo "bootstrap"
-          }
-
-          echo "ingest=$(get_tag ingest_image_uri yt-ingest)"                >> "$GITHUB_OUTPUT"
-          echo "raw_transform=$(get_tag raw_transform_image_uri yt-raw-transform)"  >> "$GITHUB_OUTPUT"
-          echo "dbt_trigger=$(get_tag dbt_trigger_image_uri yt-dbt-trigger)"      >> "$GITHUB_OUTPUT"
-          echo "dbt=$(get_tag dbt_image_uri yt-dbt)"                      >> "$GITHUB_OUTPUT"
-
-      # ── Phase 3: Full terraform apply ──────────────────────────────────────
-      - name: Phase 3 — Full terraform apply
-        run: |
-          terraform apply -auto-approve \
-            -var="ingest_image_tag=${{ steps.tags.outputs.ingest }}" \
-            -var="raw_transform_image_tag=${{ steps.tags.outputs.raw_transform }}" \
-            -var="dbt_trigger_image_tag=${{ steps.tags.outputs.dbt_trigger }}" \
-            -var="dbt_image_tag=${{ steps.tags.outputs.dbt }}" \
-            -var="youtube_api_key=${{ secrets.YOUTUBE_API_KEY }}" \
-            -var="allowed_dashboard_cidr=${{ vars.DASHBOARD_ALLOWED_CIDR }}" \
-            -var="alert_email=${{ vars.ALERT_EMAIL }}" \
-            -var='lakeformation_admin_arns=${{ vars.LAKEFORMATION_ADMIN_ARNS }}'
+          chmod +x scripts/deploy_cli.sh
+          bash scripts/deploy_cli.sh
