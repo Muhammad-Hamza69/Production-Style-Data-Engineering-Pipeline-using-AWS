@@ -17,7 +17,9 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  AWS_ACCOUNT_ID: "300617413029"
+  ECR_BASE: "300617413029.dkr.ecr.us-east-1.amazonaws.com"
 
 jobs:
   lint:
@@ -51,18 +53,15 @@ jobs:
               - 'iam_permission/**'
               - 'step_functions/**'
 
-  # Applies everything except the 3 Lambdas and the dashboard, each of which
-  # now has its own independent deploy-*.yml workflow (see instructor
-  # feedback: "three lambdas should be separately managed"). This job still
-  # applies the full untargeted root module — it just doesn't own any
-  # component's release cycle, so it reads back each Lambda's
-  # already-deployed image tag instead of assuming github.sha.
+  # ── Phase 1: ECR repos only ──────────────────────────────────────────────────
+  # Lambda functions (container image type) require the ECR image to exist
+  # BEFORE aws_lambda_function can be created. On first bootstrap the repos
+  # don't exist yet, so we must create them first, push placeholder images,
+  # then run the full apply.
   terraform-apply:
     runs-on: ubuntu-latest
     needs: changes
     permissions:
-
-
       id-token: write
       contents: read
     defaults:
@@ -81,43 +80,114 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || 'arn:aws:iam::300617413029:role/gha-deploy-role' }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
-
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.7.5"
 
       - run: terraform init
 
-      - name: Read back current per-component image tags
+      # ── Phase 1: Create ECR repos first ────────────────────────────────────
+      - name: Phase 1 — Create ECR repositories
+        run: |
+          terraform apply -auto-approve -target=module.ecr \
+            -var="youtube_api_key=${{ secrets.YOUTUBE_API_KEY }}" \
+            -var="allowed_dashboard_cidr=${{ vars.DASHBOARD_ALLOWED_CIDR }}" \
+            -var="alert_email=${{ vars.ALERT_EMAIL }}" \
+            -var='lakeformation_admin_arns=${{ vars.LAKEFORMATION_ADMIN_ARNS }}' \
+            -var="ingest_image_tag=bootstrap" \
+            -var="raw_transform_image_tag=bootstrap" \
+            -var="dbt_trigger_image_tag=bootstrap" \
+            -var="dbt_image_tag=bootstrap"
+
+      # ── Phase 2: Build & push bootstrap images ──────────────────────────────
+      # Build each Lambda Dockerfile and push a "bootstrap" tag so that the
+      # full apply (Phase 3) can create aws_lambda_function resources.
+      # On subsequent runs the ECR repos already have images so this step
+      # is effectively a no-op (push is idempotent).
+      - name: Phase 2 — Log in to ECR
+        working-directory: .
+        run: |
+          aws ecr get-login-password --region ${{ vars.AWS_REGION || 'us-east-1' }} \
+            | docker login --username AWS --password-stdin \
+              ${{ env.ECR_BASE }}
+
+      - name: Phase 2 — Build & push yt-ingest image
+        working-directory: lambdas/youtube_api_integstion
+        run: |
+          IMAGE="${{ env.ECR_BASE }}/yt-ingest:bootstrap"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Phase 2 — Build & push yt-raw-transform image
+        working-directory: lambdas/raw_transform
+        run: |
+          IMAGE="${{ env.ECR_BASE }}/yt-raw-transform:bootstrap"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Phase 2 — Build & push yt-dbt-trigger image
+        working-directory: lambdas/dbt_trigger
+        run: |
+          IMAGE="${{ env.ECR_BASE }}/yt-dbt-trigger:bootstrap"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      # ── Phase 3: Import pre-existing AWS resources into state ──────────────
+      # Resources from a previous partial apply already exist in AWS but are
+      # not in Terraform state — importing them prevents 409/AlreadyExists
+      # errors on apply.
+      - name: Phase 3 — Import existing AWS resources into Terraform state
+        run: |
+          CLUSTER="yt-pipeline-dashboard"
+          ACCOUNT="${{ env.AWS_ACCOUNT_ID }}"
+
+          # EKS access entries — created by the EKS module; 409 if already exist
+          terraform import \
+            'module.eks.aws_eks_access_entry.gha_deploy' \
+            "${CLUSTER}/arn:aws:iam::${ACCOUNT}:role/gha-deploy-role" \
+            2>/dev/null || true
+
+          terraform import \
+            'module.eks.aws_eks_access_entry.dbt_trigger' \
+            "${CLUSTER}/arn:aws:iam::${ACCOUNT}:role/yt-dbt-trigger-role" \
+            2>/dev/null || true
+
+      # ── Phase 3: Read back existing image tags from state ──────────────────
+      - name: Phase 3 — Read back current per-component image tags
         id: tags
         run: |
-          # On the very first run Terraform state is empty — `terraform output`
-          # exits non-zero AND prints "No outputs found" to STDOUT (not stderr).
-          # We must capture each value, strip any non-sha garbage, and always
-          # fall back to github.sha so GITHUB_OUTPUT receives a clean value.
-
           SHA="${{ github.sha }}"
 
+          # Validate: a real Docker tag is alphanumeric + limited punctuation.
+          # Any Terraform diagnostic output (contains box-drawing chars like
+          # ╷ │ ╵) or empty string must be rejected and replaced with SHA.
           get_tag() {
-            local raw
-            raw=$(terraform output -raw "$1" 2>/dev/null) || { echo "$SHA"; return; }
-            local tag
-            tag=$(echo "$raw" | awk -F: '{print $NF}' | tr -d '[:space:]')
-            # Reject empty or the sentinel error string
-            if [[ -z "$tag" || "$tag" == *"No outputs found"* || "$tag" == *"Warning"* ]]; then
+            local out ec tag
+            out=$(terraform output -raw "$1" 2>/dev/null)
+            ec=$?
+            # Non-zero exit → output doesn't exist yet
+            if [ $ec -ne 0 ]; then
+              echo "$SHA"
+              return
+            fi
+            # Extract the tag portion after the last colon
+            tag=$(echo "$out" | awk -F: '{print $NF}' | tr -d '[:space:]')
+            # Reject if empty OR if it contains non-Docker-tag characters
+            # (Terraform diagnostic messages contain ╷ │ ╵ etc.)
+            if [[ -z "$tag" ]] || ! [[ "$tag" =~ ^[a-zA-Z0-9._-]+$ ]]; then
               echo "$SHA"
             else
               echo "$tag"
             fi
           }
 
-          echo "ingest=$(get_tag ingest_image_uri)"           >> "$GITHUB_OUTPUT"
-          echo "raw_transform=$(get_tag raw_transform_image_uri)" >> "$GITHUB_OUTPUT"
-          echo "dbt_trigger=$(get_tag dbt_trigger_image_uri)" >> "$GITHUB_OUTPUT"
-          echo "dbt=$(get_tag dbt_image_uri)"                 >> "$GITHUB_OUTPUT"
+          echo "ingest=$(get_tag ingest_image_uri)"                >> "$GITHUB_OUTPUT"
+          echo "raw_transform=$(get_tag raw_transform_image_uri)"  >> "$GITHUB_OUTPUT"
+          echo "dbt_trigger=$(get_tag dbt_trigger_image_uri)"      >> "$GITHUB_OUTPUT"
+          echo "dbt=$(get_tag dbt_image_uri)"                      >> "$GITHUB_OUTPUT"
 
-
-      - name: Terraform apply
+      # ── Phase 3: Full terraform apply ──────────────────────────────────────
+      - name: Phase 3 — Full terraform apply
         run: |
           terraform apply -auto-approve \
             -var="ingest_image_tag=${{ steps.tags.outputs.ingest }}" \
