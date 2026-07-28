@@ -18,7 +18,8 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Muhammad-Hamza69/Youtube-Data-Pipeline-using-Python-and-AWS.git
+    repoURL: https://github.com/Muhammad-Hamza69/Production-Style-Data-Engineering-Pipeline-using-AWS.git
+
     targetRevision: main
     path: k8s
     directory:

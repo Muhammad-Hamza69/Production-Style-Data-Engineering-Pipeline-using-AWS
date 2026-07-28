@@ -151,12 +151,13 @@ data "aws_iam_policy_document" "gha_deploy_trust" {
     }
 
     condition {
-      test     = "StringEquals"
+      test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = [local.repo_subject_main, local.repo_subject_production_env]
+      values   = ["repo:${var.github_org}/${var.github_repo}:*"]
     }
   }
 }
+
 
 resource "aws_iam_role" "gha_deploy" {
   name               = "gha-deploy-role"

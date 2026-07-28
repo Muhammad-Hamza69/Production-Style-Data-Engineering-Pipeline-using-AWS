@@ -25,5 +25,6 @@ variable "github_org" {
 variable "github_repo" {
   description = "GitHub repo name (without org prefix)"
   type        = string
-  default     = "Youtube-Data-Pipeline-using-Python-and-AWS"
+  default     = "Production-Style-Data-Engineering-Pipeline-using-AWS"
 }
+
