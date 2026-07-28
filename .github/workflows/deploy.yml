@@ -139,22 +139,49 @@ jobs:
         working-directory: lambdas/youtube_api_integstion
         run: |
           IMAGE="${{ env.ECR_BASE }}/yt-ingest:bootstrap"
-          docker build -t "$IMAGE" .
-          docker push "$IMAGE"
+          # ECR has immutable tags — skip push if bootstrap already exists
+          EXISTS=$(aws ecr describe-images --region us-east-1 \
+            --repository-name yt-ingest \
+            --image-ids imageTag=bootstrap \
+            --query 'imageDetails[0].imageTag' --output text 2>/dev/null || echo "")
+          if [ "$EXISTS" = "bootstrap" ]; then
+            echo "Bootstrap image already exists in yt-ingest — skipping build."
+          else
+            docker build -t "$IMAGE" .
+            docker push "$IMAGE"
+          fi
 
       - name: Phase 2 — Build & push yt-raw-transform image
         working-directory: lambdas/raw_transform
         run: |
           IMAGE="${{ env.ECR_BASE }}/yt-raw-transform:bootstrap"
-          docker build -t "$IMAGE" .
-          docker push "$IMAGE"
+          # ECR has immutable tags — skip push if bootstrap already exists
+          EXISTS=$(aws ecr describe-images --region us-east-1 \
+            --repository-name yt-raw-transform \
+            --image-ids imageTag=bootstrap \
+            --query 'imageDetails[0].imageTag' --output text 2>/dev/null || echo "")
+          if [ "$EXISTS" = "bootstrap" ]; then
+            echo "Bootstrap image already exists in yt-raw-transform — skipping build."
+          else
+            docker build -t "$IMAGE" .
+            docker push "$IMAGE"
+          fi
 
       - name: Phase 2 — Build & push yt-dbt-trigger image
         working-directory: lambdas/dbt_trigger
         run: |
           IMAGE="${{ env.ECR_BASE }}/yt-dbt-trigger:bootstrap"
-          docker build -t "$IMAGE" .
-          docker push "$IMAGE"
+          # ECR has immutable tags — skip push if bootstrap already exists
+          EXISTS=$(aws ecr describe-images --region us-east-1 \
+            --repository-name yt-dbt-trigger \
+            --image-ids imageTag=bootstrap \
+            --query 'imageDetails[0].imageTag' --output text 2>/dev/null || echo "")
+          if [ "$EXISTS" = "bootstrap" ]; then
+            echo "Bootstrap image already exists in yt-dbt-trigger — skipping build."
+          else
+            docker build -t "$IMAGE" .
+            docker push "$IMAGE"
+          fi
 
       # ── Phase 3: Import pre-existing AWS resources into state ──────────────
       # Resources from a previous partial apply already exist in AWS but are
