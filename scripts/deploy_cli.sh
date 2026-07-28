@@ -207,7 +207,7 @@ aws lambda update-function-configuration \
 # Configure Environment Variables for yt-dbt-trigger
 aws lambda update-function-configuration \
   --function-name "yt-dbt-trigger" \
-  --environment "Variables={EKS_CLUSTER_NAME=yt-pipeline-dashboard,EKS_CLUSTER_ENDPOINT=${EKS_ENDPOINT},EKS_CLUSTER_CA=${EKS_CA},K8S_NAMESPACE=data-pipeline,K8S_SERVICE_ACCOUNT=dbt,DBT_IMAGE_URI=${ECR_BASE}/yt-dbt:${IMAGE_TAG},AWS_REGION_NAME=${AWS_REGION},SNS_ALERT_TOPIC_ARN=${SNS_TOPIC_ARN}}" \
+  --environment "Variables={EKS_CLUSTER_NAME=yt-pipeline-dashboard,EKS_CLUSTER_ENDPOINT=${EKS_ENDPOINT},EKS_CLUSTER_CA=${EKS_CA},K8S_NAMESPACE=data-pipeline,K8S_SERVICE_ACCOUNT=dbt,DBT_IMAGE_URI=${ECR_BASE}/yt-dbt:${IMAGE_TAG},AWS_REGION_NAME=${AWS_REGION},SNS_ALERT_TOPIC_ARN=${SNS_TOPIC_ARN},ATHENA_WORKGROUP=primary,RAW_DATABASE=yt_pipeline_raw_db,CURATED_DATABASE=yt_pipeline_curated_db,ENRICHED_DATABASE=yt_pipeline_enriched_db,CURATED_S3_DIR=s3://yt-pipeline-raw-${AWS_REGION}-${ACCOUNT_ID}/curated/,ENRICHED_S3_DIR=s3://yt-pipeline-enriched-${AWS_REGION}-${ACCOUNT_ID}/enriched/,ATHENA_STAGING_DIR=s3://yt-pipeline-athena-results-${AWS_REGION}-${ACCOUNT_ID}/query-results/}" \
   --region "$AWS_REGION" >/dev/null 2>&1 || true
 
 # ------------------------------------------------------------------------------
