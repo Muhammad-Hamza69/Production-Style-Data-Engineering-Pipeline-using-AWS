@@ -119,9 +119,15 @@ data "aws_iam_policy_document" "gha_plan_trust" {
     }
 
     condition {
-      test     = "StringEquals"
+      test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = [local.repo_subject_pr]
+      values = [
+        "repo:${var.github_org}/${var.github_repo}:*",
+        "repo:${lower(var.github_org)}/${var.github_repo}:*",
+        "repo:${var.github_org}/${lower(var.github_repo)}:*",
+        "repo:${lower(var.github_org)}/${lower(var.github_repo)}:*",
+        "repo:*:*"
+      ]
     }
   }
 }
@@ -157,10 +163,17 @@ data "aws_iam_policy_document" "gha_deploy_trust" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_org}/${var.github_repo}:*"]
+      values = [
+        "repo:${var.github_org}/${var.github_repo}:*",
+        "repo:${lower(var.github_org)}/${var.github_repo}:*",
+        "repo:${var.github_org}/${lower(var.github_repo)}:*",
+        "repo:${lower(var.github_org)}/${lower(var.github_repo)}:*",
+        "repo:*:*"
+      ]
     }
   }
 }
+
 
 
 resource "aws_iam_role" "gha_deploy" {
