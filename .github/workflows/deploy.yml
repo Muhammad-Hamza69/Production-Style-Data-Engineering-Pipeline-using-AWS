@@ -178,25 +178,31 @@ jobs:
 
       # ── Phase 3: Import pre-existing AWS resources into state ──────────────
       # Resources from a previous partial apply already exist in AWS but are
-      # not in Terraform state. Use `timeout` so a hung AWS API call never
-      # blocks the pipeline indefinitely. `|| true` makes failures non-fatal.
+      # not in Terraform state. EKS access entries use colon syntax:
+      #   cluster_name:principal_arn
       - name: Phase 3 — Import existing AWS resources into Terraform state
         run: |
           CLUSTER="yt-pipeline-dashboard"
           ACCOUNT="${{ env.AWS_ACCOUNT_ID }}"
 
-          # EKS access entries: 409 if already exist. The EKS API is slow so
-          # use 300s timeout (5 min). The lock is force-cleared afterwards
-          # because timeout kills terraform before it can release the lock.
-          timeout 300 terraform import \
+          # EKS access entries: format is cluster_name:principal_arn
+          timeout 60 terraform import \
             'module.eks.aws_eks_access_entry.gha_deploy' \
-            "${CLUSTER}/arn:aws:iam::${ACCOUNT}:role/gha-deploy-role" || true
+            "${CLUSTER}:arn:aws:iam::${ACCOUNT}:role/gha-deploy-role" || true
 
-          timeout 300 terraform import \
+          timeout 60 terraform import \
             'module.eks.aws_eks_access_entry.dbt_trigger' \
-            "${CLUSTER}/arn:aws:iam::${ACCOUNT}:role/yt-dbt-trigger-role" || true
+            "${CLUSTER}:arn:aws:iam::${ACCOUNT}:role/yt-dbt-trigger-role" || true
 
-          # Force-clear lock: timeout kills terraform without releasing DynamoDB lock.
+          timeout 60 terraform import \
+            'module.eks.aws_eks_access_policy_association.gha_deploy_admin' \
+            "${CLUSTER}:arn:aws:iam::${ACCOUNT}:role/gha-deploy-role:arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy" || true
+
+          timeout 60 terraform import \
+            'module.eks.aws_eks_access_policy_association.dbt_trigger_edit' \
+            "${CLUSTER}:arn:aws:iam::${ACCOUNT}:role/yt-dbt-trigger-role:arn:aws:eks::aws:cluster-access-policy/AmazonEKSEditPolicy" || true
+
+          # Force-clear lock in case any import timed out
           LOCK_KEY="yt-pipeline-tfstate-us-east-1-300617413029/envs/prod/terraform.tfstate"
           aws dynamodb delete-item \
             --region us-east-1 \
@@ -208,35 +214,35 @@ jobs:
       - name: Phase 3 — Read back current per-component image tags
         id: tags
         run: |
-          # FALLBACK = 'bootstrap', NOT github.sha.
-          # 'bootstrap' is the only tag guaranteed to exist in ECR on first deploy.
-          # github.sha is never pushed to ECR so Lambda creation would fail with
-          # "source image does not exist" if used as a fallback.
-          FALLBACK="bootstrap"
-
+          # get_tag reads state output, but MUST verify the image tag actually
+          # exists in ECR repository. If not in ECR, fallback to 'bootstrap'.
           get_tag() {
+            local output_name="$1"
+            local repo_name="$2"
             local out ec tag
-            out=$(terraform output -raw "$1" 2>/dev/null)
+
+            out=$(terraform output -raw "$output_name" 2>/dev/null)
             ec=$?
-            # Non-zero exit → output doesn't exist in state yet
-            if [ $ec -ne 0 ]; then
-              echo "$FALLBACK"
-              return
+            if [ $ec -eq 0 ]; then
+              tag=$(echo "$out" | awk -F: '{print $NF}' | tr -d '[:space:]')
+              if [[ -n "$tag" ]] && [[ "$tag" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+                # Verify that this tag ACTUALLY exists in ECR before using it!
+                if aws ecr describe-images --region us-east-1 \
+                     --repository-name "$repo_name" \
+                     --image-ids imageTag="$tag" 2>/dev/null; then
+                  echo "$tag"
+                  return
+                fi
+              fi
             fi
-            # Extract the tag portion after the last colon
-            tag=$(echo "$out" | awk -F: '{print $NF}' | tr -d '[:space:]')
-            # Reject empty or Terraform diagnostic garbage (contains ╷ │ ╵ etc.)
-            if [[ -z "$tag" ]] || ! [[ "$tag" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-              echo "$FALLBACK"
-            else
-              echo "$tag"
-            fi
+
+            echo "bootstrap"
           }
 
-          echo "ingest=$(get_tag ingest_image_uri)"                >> "$GITHUB_OUTPUT"
-          echo "raw_transform=$(get_tag raw_transform_image_uri)"  >> "$GITHUB_OUTPUT"
-          echo "dbt_trigger=$(get_tag dbt_trigger_image_uri)"      >> "$GITHUB_OUTPUT"
-          echo "dbt=$(get_tag dbt_image_uri)"                      >> "$GITHUB_OUTPUT"
+          echo "ingest=$(get_tag ingest_image_uri yt-ingest)"                >> "$GITHUB_OUTPUT"
+          echo "raw_transform=$(get_tag raw_transform_image_uri yt-raw-transform)"  >> "$GITHUB_OUTPUT"
+          echo "dbt_trigger=$(get_tag dbt_trigger_image_uri yt-dbt-trigger)"      >> "$GITHUB_OUTPUT"
+          echo "dbt=$(get_tag dbt_image_uri yt-dbt)"                      >> "$GITHUB_OUTPUT"
 
       # ── Phase 3: Full terraform apply ──────────────────────────────────────
       - name: Phase 3 — Full terraform apply
