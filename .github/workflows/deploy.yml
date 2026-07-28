@@ -91,15 +91,30 @@ jobs:
       - name: Read back current per-component image tags
         id: tags
         run: |
-          INGEST_TAG=$(terraform output -raw ingest_image_uri 2>/dev/null | awk -F: '{print $NF}')
-          RAW_TRANSFORM_TAG=$(terraform output -raw raw_transform_image_uri 2>/dev/null | awk -F: '{print $NF}')
-          DBT_TRIGGER_TAG=$(terraform output -raw dbt_trigger_image_uri 2>/dev/null | awk -F: '{print $NF}')
-          DBT_TAG=$(terraform output -raw dbt_image_uri 2>/dev/null | awk -F: '{print $NF}')
+          # On the very first run Terraform state is empty — `terraform output`
+          # exits non-zero AND prints "No outputs found" to STDOUT (not stderr).
+          # We must capture each value, strip any non-sha garbage, and always
+          # fall back to github.sha so GITHUB_OUTPUT receives a clean value.
 
-          echo "ingest=${INGEST_TAG:-${{ github.sha }}}" >> "$GITHUB_OUTPUT"
-          echo "raw_transform=${RAW_TRANSFORM_TAG:-${{ github.sha }}}" >> "$GITHUB_OUTPUT"
-          echo "dbt_trigger=${DBT_TRIGGER_TAG:-${{ github.sha }}}" >> "$GITHUB_OUTPUT"
-          echo "dbt=${DBT_TAG:-${{ github.sha }}}" >> "$GITHUB_OUTPUT"
+          SHA="${{ github.sha }}"
+
+          get_tag() {
+            local raw
+            raw=$(terraform output -raw "$1" 2>/dev/null) || { echo "$SHA"; return; }
+            local tag
+            tag=$(echo "$raw" | awk -F: '{print $NF}' | tr -d '[:space:]')
+            # Reject empty or the sentinel error string
+            if [[ -z "$tag" || "$tag" == *"No outputs found"* || "$tag" == *"Warning"* ]]; then
+              echo "$SHA"
+            else
+              echo "$tag"
+            fi
+          }
+
+          echo "ingest=$(get_tag ingest_image_uri)"           >> "$GITHUB_OUTPUT"
+          echo "raw_transform=$(get_tag raw_transform_image_uri)" >> "$GITHUB_OUTPUT"
+          echo "dbt_trigger=$(get_tag dbt_trigger_image_uri)" >> "$GITHUB_OUTPUT"
+          echo "dbt=$(get_tag dbt_image_uri)"                 >> "$GITHUB_OUTPUT"
 
 
       - name: Terraform apply
