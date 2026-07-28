@@ -1,4 +1,6 @@
+# Production Infrastructure Stack Composition
 locals {
+
   # Passed explicitly into module.eks (rather than relying on its internal
   # default) so this same literal can be reused below to construct the
   # cluster's ARN without depending on module.eks's own output — that

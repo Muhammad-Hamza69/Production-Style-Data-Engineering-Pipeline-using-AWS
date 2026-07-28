@@ -9,6 +9,8 @@ name: Provision Shared Infrastructure
 on:
   push:
     branches: [main]
+  workflow_dispatch: {}
+
 
 permissions:
   id-token: write
