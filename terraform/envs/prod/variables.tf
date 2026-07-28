@@ -52,8 +52,9 @@ variable "alert_email" {
 }
 
 variable "quicksight_user_arn" {
-  description = "QuickSight user ARN to grant on the Athena data source/datasets. No default — account-specific, pass via -var or the QUICKSIGHT_USER_ARN CI variable."
+  description = "QuickSight user ARN to grant on the Athena data source/datasets. Leave empty to skip QuickSight provisioning (e.g. when QuickSight is not subscribed). Pass via -var or the QUICKSIGHT_USER_ARN CI variable when ready."
   type        = string
+  default     = ""
 }
 
 variable "lakeformation_admin_arns" {

@@ -127,5 +127,4 @@ jobs:
             -var="youtube_api_key=${{ secrets.YOUTUBE_API_KEY }}" \
             -var="allowed_dashboard_cidr=${{ vars.DASHBOARD_ALLOWED_CIDR }}" \
             -var="alert_email=${{ vars.ALERT_EMAIL }}" \
-            -var="quicksight_user_arn=${{ vars.QUICKSIGHT_USER_ARN }}" \
             -var='lakeformation_admin_arns=${{ vars.LAKEFORMATION_ADMIN_ARNS }}'

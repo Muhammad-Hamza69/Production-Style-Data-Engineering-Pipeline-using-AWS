@@ -202,6 +202,7 @@ module "cloudtrail" {
 
 
 module "quicksight" {
+  count                  = var.quicksight_user_arn != "" ? 1 : 0
   source                 = "../../modules/quicksight"
   quicksight_user_arn    = var.quicksight_user_arn
   enriched_bucket_name   = module.s3.bucket_names["enriched"]
