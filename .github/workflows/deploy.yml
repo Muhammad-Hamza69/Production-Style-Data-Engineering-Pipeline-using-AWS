@@ -185,20 +185,18 @@ jobs:
           CLUSTER="yt-pipeline-dashboard"
           ACCOUNT="${{ env.AWS_ACCOUNT_ID }}"
 
-          # EKS access entries — 409 if already exist on cluster
-          timeout 60 terraform import \
+          # EKS access entries: 409 if already exist. The EKS API is slow so
+          # use 300s timeout (5 min). The lock is force-cleared afterwards
+          # because timeout kills terraform before it can release the lock.
+          timeout 300 terraform import \
             'module.eks.aws_eks_access_entry.gha_deploy' \
-            "${CLUSTER}/arn:aws:iam::${ACCOUNT}:role/gha-deploy-role" \
-            2>/dev/null || true
+            "${CLUSTER}/arn:aws:iam::${ACCOUNT}:role/gha-deploy-role" || true
 
-          timeout 60 terraform import \
+          timeout 300 terraform import \
             'module.eks.aws_eks_access_entry.dbt_trigger' \
-            "${CLUSTER}/arn:aws:iam::${ACCOUNT}:role/yt-dbt-trigger-role" \
-            2>/dev/null || true
+            "${CLUSTER}/arn:aws:iam::${ACCOUNT}:role/yt-dbt-trigger-role" || true
 
-          # CRITICAL: timeout kills terraform without letting it release the
-          # DynamoDB state lock. Force-clear the lock after every import attempt
-          # so the subsequent full apply can acquire it cleanly.
+          # Force-clear lock: timeout kills terraform without releasing DynamoDB lock.
           LOCK_KEY="yt-pipeline-tfstate-us-east-1-300617413029/envs/prod/terraform.tfstate"
           aws dynamodb delete-item \
             --region us-east-1 \
@@ -210,26 +208,26 @@ jobs:
       - name: Phase 3 — Read back current per-component image tags
         id: tags
         run: |
-          SHA="${{ github.sha }}"
+          # FALLBACK = 'bootstrap', NOT github.sha.
+          # 'bootstrap' is the only tag guaranteed to exist in ECR on first deploy.
+          # github.sha is never pushed to ECR so Lambda creation would fail with
+          # "source image does not exist" if used as a fallback.
+          FALLBACK="bootstrap"
 
-          # Validate: a real Docker tag is alphanumeric + limited punctuation.
-          # Any Terraform diagnostic output (contains box-drawing chars like
-          # ╷ │ ╵) or empty string must be rejected and replaced with SHA.
           get_tag() {
             local out ec tag
             out=$(terraform output -raw "$1" 2>/dev/null)
             ec=$?
-            # Non-zero exit → output doesn't exist yet
+            # Non-zero exit → output doesn't exist in state yet
             if [ $ec -ne 0 ]; then
-              echo "$SHA"
+              echo "$FALLBACK"
               return
             fi
             # Extract the tag portion after the last colon
             tag=$(echo "$out" | awk -F: '{print $NF}' | tr -d '[:space:]')
-            # Reject if empty OR if it contains non-Docker-tag characters
-            # (Terraform diagnostic messages contain ╷ │ ╵ etc.)
+            # Reject empty or Terraform diagnostic garbage (contains ╷ │ ╵ etc.)
             if [[ -z "$tag" ]] || ! [[ "$tag" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-              echo "$SHA"
+              echo "$FALLBACK"
             else
               echo "$tag"
             fi
