@@ -188,22 +188,26 @@ deploy_lambda "yt-ingest" "yt-ingest" "$INGEST_ROLE_ARN"
 deploy_lambda "yt-raw-transform" "yt-raw-transform" "$TRANSFORM_ROLE_ARN"
 deploy_lambda "yt-dbt-trigger" "yt-dbt-trigger" "$DBT_TRIGGER_ROLE_ARN"
 
+# Query EKS cluster endpoint and CA for dbt-trigger
+EKS_ENDPOINT=$(aws eks describe-cluster --name yt-pipeline-dashboard --query 'cluster.endpoint' --output text --region "$AWS_REGION" 2>/dev/null || echo "")
+EKS_CA=$(aws eks describe-cluster --name yt-pipeline-dashboard --query 'cluster.certificateAuthority.data' --output text --region "$AWS_REGION" 2>/dev/null || echo "")
+
 # Configure Environment Variables for yt-ingest
 aws lambda update-function-configuration \
   --function-name "yt-ingest" \
-  --environment "Variables={STAGING_BUCKET_NAME=yt-pipeline-staging-${AWS_REGION}-${ACCOUNT_ID},YOUTUBE_API_KEY_SECRET_ARN=${SECRET_ARN},SNS_TOPIC_ARN=${SNS_TOPIC_ARN}}" \
+  --environment "Variables={S3_BUCKET_STAGING=yt-pipeline-staging-${AWS_REGION}-${ACCOUNT_ID},YOUTUBE_API_KEY_SECRET_ARN=${SECRET_ARN},SNS_ALERT_TOPIC_ARN=${SNS_TOPIC_ARN}}" \
   --region "$AWS_REGION" >/dev/null 2>&1 || true
 
 # Configure Environment Variables for yt-raw-transform
 aws lambda update-function-configuration \
   --function-name "yt-raw-transform" \
-  --environment "Variables={STAGING_BUCKET_NAME=yt-pipeline-staging-${AWS_REGION}-${ACCOUNT_ID},RAW_BUCKET_NAME=yt-pipeline-raw-${AWS_REGION}-${ACCOUNT_ID},GLUE_RAW_DB=yt_pipeline_raw_db,SNS_TOPIC_ARN=${SNS_TOPIC_ARN}}" \
+  --environment "Variables={S3_BUCKET_STAGING=yt-pipeline-staging-${AWS_REGION}-${ACCOUNT_ID},S3_BUCKET_RAW=yt-pipeline-raw-${AWS_REGION}-${ACCOUNT_ID},GLUE_DB_RAW=yt_pipeline_raw_db,ATHENA_WORKGROUP=primary,SNS_ALERT_TOPIC_ARN=${SNS_TOPIC_ARN}}" \
   --region "$AWS_REGION" >/dev/null 2>&1 || true
 
 # Configure Environment Variables for yt-dbt-trigger
 aws lambda update-function-configuration \
   --function-name "yt-dbt-trigger" \
-  --environment "Variables={EKS_CLUSTER_NAME=yt-pipeline-dashboard,DBT_IMAGE_URI=${ECR_BASE}/yt-dbt:${IMAGE_TAG},SNS_TOPIC_ARN=${SNS_TOPIC_ARN}}" \
+  --environment "Variables={EKS_CLUSTER_NAME=yt-pipeline-dashboard,EKS_CLUSTER_ENDPOINT=${EKS_ENDPOINT},EKS_CLUSTER_CA=${EKS_CA},K8S_NAMESPACE=data-pipeline,K8S_SERVICE_ACCOUNT=dbt,DBT_IMAGE_URI=${ECR_BASE}/yt-dbt:${IMAGE_TAG},AWS_REGION_NAME=${AWS_REGION},SNS_ALERT_TOPIC_ARN=${SNS_TOPIC_ARN}}" \
   --region "$AWS_REGION" >/dev/null 2>&1 || true
 
 # ------------------------------------------------------------------------------
@@ -233,10 +237,17 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 10. EKS Access Entry
+# 10. EKS Access Entry & K8s Namespace Bootstrap
 # ------------------------------------------------------------------------------
-echo "==> [10/10] Configuring EKS Access Entries for cluster yt-pipeline-dashboard..."
+echo "==> [10/10] Configuring EKS Access Entries & K8s namespace for cluster yt-pipeline-dashboard..."
 EKS_CLUSTER="yt-pipeline-dashboard"
+
+# Bootstrap kubeconfig & apply k8s namespace + serviceaccount if kubectl is installed
+if command -v kubectl >/dev/null 2>&1; then
+  aws eks update-kubeconfig --name "$EKS_CLUSTER" --region "$AWS_REGION" 2>/dev/null || true
+  kubectl apply -f k8s/dbt/namespace.yaml 2>/dev/null || true
+  kubectl apply -f k8s/dbt/serviceaccount.yaml 2>/dev/null || true
+fi
 aws eks create-access-entry \
   --cluster-name "$EKS_CLUSTER" \
   --principal-arn "arn:aws:iam::${ACCOUNT_ID}:role/gha-deploy-role" \
