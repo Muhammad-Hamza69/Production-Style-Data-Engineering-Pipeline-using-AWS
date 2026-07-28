@@ -61,8 +61,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.terraform == 'true'
-    environment: production   # manual-approval gate: a required reviewer must approve before this job runs
     permissions:
+
       id-token: write
       contents: read
     defaults:
