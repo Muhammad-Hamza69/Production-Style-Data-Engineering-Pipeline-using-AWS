@@ -150,13 +150,34 @@ def _build_job_manifest(job_name: str) -> dict:
 
     env = [
         {"name": "AWS_REGION", "value": REGION},
-        {"name": "ATHENA_WORKGROUP", "value": os.environ.get("ATHENA_WORKGROUP", "primary")},
-        {"name": "RAW_DATABASE", "value": os.environ.get("RAW_DATABASE", "yt_pipeline_raw_db")},
-        {"name": "CURATED_DATABASE", "value": os.environ.get("CURATED_DATABASE", "yt_pipeline_curated_db")},
-        {"name": "ENRICHED_DATABASE", "value": os.environ.get("ENRICHED_DATABASE", "yt_pipeline_enriched_db")},
-        {"name": "CURATED_S3_DIR", "value": os.environ.get("CURATED_S3_DIR", curated_s3)},
-        {"name": "ENRICHED_S3_DIR", "value": os.environ.get("ENRICHED_S3_DIR", enriched_s3)},
-        {"name": "ATHENA_STAGING_DIR", "value": os.environ.get("ATHENA_STAGING_DIR", athena_s3)},
+        {
+            "name": "ATHENA_WORKGROUP",
+            "value": os.environ.get("ATHENA_WORKGROUP", "primary"),
+        },
+        {
+            "name": "RAW_DATABASE",
+            "value": os.environ.get("RAW_DATABASE", "yt_pipeline_raw_db"),
+        },
+        {
+            "name": "CURATED_DATABASE",
+            "value": os.environ.get("CURATED_DATABASE", "yt_pipeline_curated_db"),
+        },
+        {
+            "name": "ENRICHED_DATABASE",
+            "value": os.environ.get("ENRICHED_DATABASE", "yt_pipeline_enriched_db"),
+        },
+        {
+            "name": "CURATED_S3_DIR",
+            "value": os.environ.get("CURATED_S3_DIR", curated_s3),
+        },
+        {
+            "name": "ENRICHED_S3_DIR",
+            "value": os.environ.get("ENRICHED_S3_DIR", enriched_s3),
+        },
+        {
+            "name": "ATHENA_STAGING_DIR",
+            "value": os.environ.get("ATHENA_STAGING_DIR", athena_s3),
+        },
     ]
     return {
         "apiVersion": "batch/v1",

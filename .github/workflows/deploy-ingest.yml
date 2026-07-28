@@ -19,6 +19,10 @@ permissions:
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
 
+concurrency:
+  group: terraform-prod-lock
+  cancel-in-progress: false
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest

@@ -45,3 +45,9 @@ jobs:
         run: |
           chmod +x scripts/deploy_cli.sh
           bash scripts/deploy_cli.sh
+
+      - name: Trigger Step Functions Execution
+        run: |
+          aws stepfunctions start-execution \
+            --state-machine-arn "arn:aws:states:${{ env.AWS_REGION }}:${{ env.AWS_ACCOUNT_ID }}:stateMachine:yt-data-pipeline" \
+            --region ${{ env.AWS_REGION }}
