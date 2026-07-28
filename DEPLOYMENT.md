@@ -125,3 +125,5 @@ state bucket and lock table have `prevent_destroy = true` and are meant to be ke
 - If you ever find a real credential committed to this repo, treat it as compromised
   immediately (rotate it at the provider) even after removing it from git history —
   history rewrites don't undo prior exposure on a pushed remote.
+
+
