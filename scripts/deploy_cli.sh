@@ -100,6 +100,7 @@ fi
 # ------------------------------------------------------------------------------
 echo "==> [6/10] Provisioning Glue Catalog databases..."
 aws glue create-database --database-input '{"Name":"yt_pipeline_raw_db"}' --region "$AWS_REGION" 2>/dev/null || true
+aws glue create-database --database-input '{"Name":"yt_pipeline_curated_db"}' --region "$AWS_REGION" 2>/dev/null || true
 aws glue create-database --database-input '{"Name":"yt_pipeline_enriched_db"}' --region "$AWS_REGION" 2>/dev/null || true
 
 # ------------------------------------------------------------------------------
@@ -148,11 +149,55 @@ TRANSFORM_ROLE_ARN=$(create_or_get_role "yt-transform-role" "$LAMBDA_TRUST_POLIC
 DBT_TRIGGER_ROLE_ARN=$(create_or_get_role "yt-dbt-trigger-role" "$LAMBDA_TRUST_POLICY")
 SFN_ROLE_ARN=$(create_or_get_role "yt-data-pipeline-sfn-role" "$SFN_TRUST_POLICY")
 
-# Attach AdministratorAccess / PowerUser policy for seamless execution
+# Attach AdministratorAccess policy for execution roles
 aws iam attach-role-policy --role-name "yt-ingest-role" --policy-arn "arn:aws:iam::aws:policy/AdministratorAccess" 2>/dev/null || true
 aws iam attach-role-policy --role-name "yt-transform-role" --policy-arn "arn:aws:iam::aws:policy/AdministratorAccess" 2>/dev/null || true
 aws iam attach-role-policy --role-name "yt-dbt-trigger-role" --policy-arn "arn:aws:iam::aws:policy/AdministratorAccess" 2>/dev/null || true
 aws iam attach-role-policy --role-name "yt-data-pipeline-sfn-role" --policy-arn "arn:aws:iam::aws:policy/AdministratorAccess" 2>/dev/null || true
+
+# Provision IRSA role (yt-pipeline-dbt-irsa) for Kubernetes ServiceAccount (dbt)
+echo "Provisioning IRSA Role for EKS dbt Pods..."
+OIDC_ISSUER=$(aws eks describe-cluster --name yt-pipeline-dashboard --query 'cluster.identity.oidc.issuer' --output text --region "$AWS_REGION" 2>/dev/null || echo "")
+if [ -n "$OIDC_ISSUER" ] && [ "$OIDC_ISSUER" != "None" ]; then
+  OIDC_HOST=$(echo "$OIDC_ISSUER" | sed 's|https://||')
+  OIDC_ARN="arn:aws:iam::${ACCOUNT_ID}:oidc-provider/${OIDC_HOST}"
+
+  if ! aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$OIDC_ARN" >/dev/null 2>&1; then
+    echo "Creating IAM OIDC Provider for EKS..."
+    aws iam create-open-id-connect-provider \
+      --url "$OIDC_ISSUER" \
+      --client-id-list "sts.amazonaws.com" \
+      --thumbprint-list "9e99a48a9960b14926bb7f3b02e22da2b0ab7280" 2>/dev/null || true
+  fi
+
+  cat <<EOF > /tmp/dbt_irsa_trust.json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "${OIDC_ARN}"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "${OIDC_HOST}:sub": "system:serviceaccount:data-pipeline:dbt",
+          "${OIDC_HOST}:aud": "sts.amazonaws.com"
+        }
+      }
+    }
+  ]
+}
+EOF
+  if ! aws iam get-role --role-name "yt-pipeline-dbt-irsa" >/dev/null 2>&1; then
+    echo "Creating IRSA role: yt-pipeline-dbt-irsa"
+    aws iam create-role --role-name "yt-pipeline-dbt-irsa" --assume-role-policy-document file:///tmp/dbt_irsa_trust.json >/dev/null
+  else
+    aws iam update-assume-role-policy --role-name "yt-pipeline-dbt-irsa" --policy-document file:///tmp/dbt_irsa_trust.json >/dev/null 2>&1 || true
+  fi
+  aws iam attach-role-policy --role-name "yt-pipeline-dbt-irsa" --policy-arn "arn:aws:iam::aws:policy/AdministratorAccess" 2>/dev/null || true
+fi
 
 # ------------------------------------------------------------------------------
 # 8. Create / Update Lambdas
