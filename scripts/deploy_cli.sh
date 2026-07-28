@@ -39,9 +39,8 @@ build_and_push() {
   local dir="$1"
   local repo="$2"
   echo "Building image for $repo from $dir..."
-  docker build -t "${ECR_BASE}/${repo}:${IMAGE_TAG}" -t "${ECR_BASE}/${repo}:latest" "$dir"
+  docker build -t "${ECR_BASE}/${repo}:${IMAGE_TAG}" "$dir"
   docker push "${ECR_BASE}/${repo}:${IMAGE_TAG}"
-  docker push "${ECR_BASE}/${repo}:latest"
 }
 
 build_and_push "lambdas/youtube_api_integstion" "yt-ingest"
