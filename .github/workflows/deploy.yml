@@ -196,6 +196,16 @@ jobs:
             "${CLUSTER}/arn:aws:iam::${ACCOUNT}:role/yt-dbt-trigger-role" \
             2>/dev/null || true
 
+          # CRITICAL: timeout kills terraform without letting it release the
+          # DynamoDB state lock. Force-clear the lock after every import attempt
+          # so the subsequent full apply can acquire it cleanly.
+          LOCK_KEY="yt-pipeline-tfstate-us-east-1-300617413029/envs/prod/terraform.tfstate"
+          aws dynamodb delete-item \
+            --region us-east-1 \
+            --table-name yt-pipeline-tfstate-lock \
+            --key "{\"LockID\": {\"S\": \"${LOCK_KEY}\"}}" 2>/dev/null || true
+          echo "Post-import lock cleared."
+
       # ── Phase 3: Read back existing image tags from state ──────────────────
       - name: Phase 3 — Read back current per-component image tags
         id: tags
