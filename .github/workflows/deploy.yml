@@ -62,16 +62,25 @@ jobs:
     needs: changes
     if: needs.changes.outputs.terraform == 'true'
     environment: production   # manual-approval gate: a required reviewer must approve before this job runs
+    permissions:
+      id-token: write
+      contents: read
     defaults:
       run:
         working-directory: terraform/envs/prod
     steps:
       - uses: actions/checkout@v4
 
+      - name: Debug Role ARN
+        run: |
+          echo "Role ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN || 'arn:aws:iam::300617413029:role/gha-deploy-role' }}"
+          echo "Region: ${{ vars.AWS_REGION || 'us-east-1' }}"
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || 'arn:aws:iam::300617413029:role/gha-deploy-role' }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
 
       - uses: hashicorp/setup-terraform@v3
         with:

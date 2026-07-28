@@ -82,8 +82,12 @@ resource "aws_iam_openid_connect_provider" "github" {
   client_id_list = ["sts.amazonaws.com"]
   # GitHub's OIDC thumbprint (rotates rarely; AWS validates the cert chain
   # regardless, this is required by the API but not the actual trust anchor).
-  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+  thumbprint_list = [
+    "6938fd4d98bab03faadb97b34396831e3780aea1",
+    "1c3d42fcd828771256491a50f56f0196e37a9c39"
+  ]
 }
+
 
 locals {
   repo_subject_pr   = "repo:${var.github_org}/${var.github_repo}:pull_request"
