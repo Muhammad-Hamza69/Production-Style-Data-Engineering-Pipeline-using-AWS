@@ -23,9 +23,10 @@ REPOS=("yt-ingest" "yt-raw-transform" "yt-dbt-trigger" "yt-dbt")
 for repo in "${REPOS[@]}"; do
   if ! aws ecr describe-repositories --repository-names "$repo" --region "$AWS_REGION" >/dev/null 2>&1; then
     echo "Creating ECR repo: $repo"
-    aws ecr create-repository --repository-name "$repo" --region "$AWS_REGION"
+    aws ecr create-repository --repository-name "$repo" --image-tag-mutability MUTABLE --region "$AWS_REGION"
   else
     echo "ECR repo exists: $repo"
+    aws ecr put-image-tag-mutability --repository-name "$repo" --image-tag-mutability MUTABLE --region "$AWS_REGION" >/dev/null 2>&1 || true
   fi
 done
 
@@ -40,11 +41,7 @@ build_and_push() {
   local repo="$2"
   echo "Building image for $repo from $dir..."
   docker build -t "${ECR_BASE}/${repo}:${IMAGE_TAG}" "$dir"
-  if aws ecr batch-get-image --repository-name "$repo" --image-ids imageTag="${IMAGE_TAG}" --region "$AWS_REGION" --query 'images[0].imageId' --output text 2>/dev/null | grep -q "${IMAGE_TAG}"; then
-    echo "Image tag ${IMAGE_TAG} already exists in ECR repository ${repo}, skipping push..."
-  else
-    docker push "${ECR_BASE}/${repo}:${IMAGE_TAG}" || true
-  fi
+  docker push "${ECR_BASE}/${repo}:${IMAGE_TAG}"
 }
 
 build_and_push "lambdas/youtube_api_integstion" "yt-ingest"
