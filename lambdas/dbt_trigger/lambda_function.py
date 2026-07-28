@@ -10,6 +10,7 @@ failed Lambda invocation. No separate Choice state is needed to inspect a
 payload field; a non-zero dbt exit code becomes this Lambda raising, full
 stop.
 
+
 This Lambda does the Kubernetes API work itself (create Job, poll status,
 fetch pod logs on failure) rather than relying on Step Functions' lower-level
 eks:call integration directly — same operational pattern as every other step
